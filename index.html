@@ -52,39 +52,112 @@
     const quoteEl = document.querySelector('.quote');
     const authorEl = document.querySelector('.author');
 
+    // Optional local fallback if all APIs fail
+    const localFallback = [
+      { content: "Stay hungry, stay foolish.", author: "Steve Jobs" },
+      { content: "The only way out is through.", author: "Robert Frost" },
+      { content: "Do or do not. There is no try.", author: "Yoda" },
+      { content: "Make it work, make it right, make it fast.", author: "Kent Beck" }
+    ];
+
+    // Providers to try in order. Each returns a normalized { content, author }.
+    const providers = [
+      // 1) ZenQuotes
+      async () => {
+        const r = await fetch('https://zenquotes.io/api/random', {
+          method: 'GET',
+          headers: { 'Accept': 'application/json' },
+          credentials: 'omit',
+          cache: 'no-store'
+        });
+        if (!r.ok) throw new Error(`ZenQuotes HTTP ${r.status}`);
+        const arr = await r.json();
+        const q = Array.isArray(arr) && arr[0] ? arr : null;
+        if (!q || !q.q) throw new Error('ZenQuotes malformed');
+        return { content: q.q, author: q.a || 'Unknown' };
+      },
+
+      // 2) FavQs Quote of the Day
+      async () => {
+        const r = await fetch('https://favqs.com/api/qotd', {
+          method: 'GET',
+          headers: { 'Accept': 'application/json' },
+          credentials: 'omit',
+          cache: 'no-store'
+        });
+        if (!r.ok) throw new Error(`FavQs HTTP ${r.status}`);
+        const j = await r.json();
+        const q = j && j.quote;
+        if (!q || !q.body) throw new Error('FavQs malformed');
+        return { content: q.body, author: q.author || 'Unknown' };
+      },
+
+      // 3) Programming Quotes (dev-themed)
+      async () => {
+        const r = await fetch('https://programming-quotesapi.vercel.app/api/random', {
+          method: 'GET',
+          headers: { 'Accept': 'application/json' },
+          credentials: 'omit',
+          cache: 'no-store'
+        });
+        if (!r.ok) throw new Error(`ProgrammingQuotes HTTP ${r.status}`);
+        const j = await r.json();
+        if (!j || !j.quote) throw new Error('ProgrammingQuotes malformed');
+        return { content: j.quote, author: j.author || 'Unknown' };
+      },
+
+      // 4) Quotable (kept last since you saw TLS issues locally)
+      async () => {
+        const r = await fetch('https://api.quotable.io/random', {
+          method: 'GET',
+          headers: { 'Accept': 'application/json' },
+          credentials: 'omit',
+          cache: 'no-store'
+        });
+        if (!r.ok) throw new Error(`Quotable HTTP ${r.status}`);
+        const j = await r.json();
+        if (!j || !j.content) throw new Error('Quotable malformed');
+        return { content: j.content, author: j.author || 'Unknown' };
+      }
+    ];
+
+    async function getQuoteWithFallback() {
+      const errors = [];
+      for (const provider of providers) {
+        try {
+          const q = await provider();
+          return q;
+        } catch (e) {
+          errors.push(String(e?.message || e));
+        }
+      }
+      // If everything failed, use a local fallback
+      if (localFallback.length) {
+        const q = localFallback[Math.floor(Math.random() * localFallback.length)];
+        return { ...q, _fallback: true, _errors: errors };
+      }
+      // If no local fallback, throw with accumulated errors
+      throw new Error('All providers failed: ' + errors.join(' | '));
+    }
+
     async function loadQuote() {
       try {
-        // Use HTTPS endpoint directly (no redirects)
-        const url = 'https://api.quotable.io/random';
+        // Small delay can help WebViews (Notion app) initialize network
+        await new Promise(r => setTimeout(r, 50));
 
-        // Use a simple fetch; avoid credentials/cookies in cross-origin iframes
-        const res = await fetch(url, {
-          method: 'GET',
-          headers: {
-            'Accept': 'application/json'
-          },
-          // Explicitly avoid sending credentials in an iframe context
-          credentials: 'omit',
-          cache: 'no-store' // Not required, but reduces stale caching in embeds
-        });
+        const data = await getQuoteWithFallback();
 
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}`);
-        }
-
-        const data = await res.json();
-
-        if (!data || !data.content) {
-          throw new Error('Malformed response');
-        }
-
+        // Render
         quoteEl.textContent = `“${data.content}”`;
         authorEl.textContent = data.author ? `— ${data.author}` : '— Unknown';
+
+        // If it came from local fallback, you can optionally note it in console
+        if (data._fallback) {
+          console.warn('Using local fallback due to errors:', data._errors);
+        }
       } catch (e) {
-        // Show the error in UI for debugging inside Notion
         quoteEl.textContent = 'Oops! Failed to load a quote.';
-        authorEl.textContent = String(e && e.message ? e.message : e || '');
-        // Also log for your browser console when debugging outside Notion
+        authorEl.textContent = String(e?.message || e || '');
         console.error('Quote load error:', e);
       }
     }
